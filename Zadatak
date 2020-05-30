@@ -1,0 +1,203 @@
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include <avr/pgmspace.h>
+#include <util/delay.h>
+
+//Velicina prijemnog bafera (mora biti 2^n)
+#define USART_RX_BUFFER_SIZE 64
+
+char Rx_Buffer[USART_RX_BUFFER_SIZE];			//prijemni FIFO bafer
+volatile unsigned char Rx_Buffer_Size = 0;	//broj karaktera u prijemnom baferu
+volatile unsigned char Rx_Buffer_First = 0;
+volatile unsigned char Rx_Buffer_Last = 0;
+
+ISR(USART_RX_vect)
+{
+  	Rx_Buffer[Rx_Buffer_Last++] = UDR0;		//ucitavanje primljenog karaktera
+	Rx_Buffer_Last &= USART_RX_BUFFER_SIZE - 1;	//povratak na pocetak u slucaju prekoracenja
+	if (Rx_Buffer_Size < USART_RX_BUFFER_SIZE)
+		Rx_Buffer_Size++;					//inkrement brojaca primljenih karaktera
+}
+
+void usartInit(unsigned long baud)
+{
+	UCSR0A = 0x00;	//inicijalizacija indikatora
+					//U2Xn = 0: onemogucena dvostruka brzina
+					//MPCMn = 0: onemogucen multiprocesorski rezim
+
+	UCSR0B = 0x98;	//RXCIEn = 1: dozvola prekida izavanog okoncanjem prijema
+					//RXENn = 1: dozvola prijema
+					//TXENn = 1: dozvola slanja
+
+	UCSR0C = 0x06;	//UMSELn[1:0] = 00: asinroni rezim
+					//UPMn[1:0] = 00: bit pariteta se ne koristi
+					//USBSn = 0: koristi se jedan stop bit
+					//UCSzn[2:0] = 011: 8bitni prenos
+
+	UBRR0 = F_CPU / (16 * baud) - 1;
+
+	sei();	//I = 1 (dozvola prekida)
+}
+
+unsigned char usartAvailable()
+{
+	return Rx_Buffer_Size;		//ocitavanje broja karaktera u prijemnom baferu
+}
+
+void usartPutChar(char c)
+{
+	while(!(UCSR0A & 0x20));	//ceka da se setuje UDREn (indikacija da je predajni bafer prazan)
+	UDR0 = c;					//upis karaktera u predajni bafer
+}
+
+void usartPutString(char *s)
+{
+	while(*s != 0)				//petlja se izvrsava do nailaska na nul-terminator
+	{
+		usartPutChar(*s);		//slanje tekuceg karaktera
+		s++;					//azuriranje pokazivaca na tekuci karakter
+	}
+}
+
+void usartPutString_P(const char *s)
+{
+	while (1)
+	{
+		char c = pgm_read_byte(s++);	//citanje sledeceg karaktera iz programske memorije
+		if (c == '\0')					//izlazak iz petlje u slucaju
+			return;						//nailaska na terminator
+		usartPutChar(c);				//slanje karaktera
+	}
+}
+
+char usartGetChar()
+{
+	char c;
+
+	if (!Rx_Buffer_Size)						//bafer je prazan?
+		return -1;
+  	c = Rx_Buffer[Rx_Buffer_First++];			//citanje karaktera iz prijemnog bafera
+	Rx_Buffer_First &= USART_RX_BUFFER_SIZE - 1;	//povratak na pocetak u slucaju prekoracenja
+	Rx_Buffer_Size--;							//dekrement brojaca karaktera u prijemnom baferu
+
+	return c;
+}
+
+unsigned char usartGetString(char *s)
+{
+	unsigned char len = 0;
+
+	while(Rx_Buffer_Size) 			//ima karaktera u faferu?
+		s[len++] = usartGetChar();	//ucitavanje novog karaktera
+
+	s[len] = 0;						//terminacija stringa
+	return len;						//vraca broj ocitanih karaktera
+}
+
+//Baza podataka: imena
+#define BR_KORISNIKA 10
+
+char KORISNICI[BR_KORISNIKA][32] =
+{
+	"Sundjer Bob Kockalone",
+    "Dijego Armando Maradona",
+    "Dzejms bond.",
+    "Zoran Kostic Cane",
+    "Kim Dzong Un",
+  	"Marko Markovic",
+  	"Pera Peric",
+  	"Petar Petrovic",
+  	"Milos Milosevic",
+    "Luka Bukva"
+};
+char PIN[BR_KORISNIKA][5] = 
+{
+  "0000",
+  "1111",
+  "2222",
+  "3333",
+  "4444",
+  "5555",
+  "6666",
+  "7777",
+  "8888",
+  "9999"
+};
+
+int main()
+{
+  	char ime_i_prezime[32];
+  	char faza = 0;
+  	char broj_korisnika;
+  	char uneti_pin[5];
+  	char brojac_faza3 = 0;
+	usartInit(9600);
+  	usartPutString("Dobro dosli!\r\n");
+  	usartPutString("Unesite vase ime i prezime!\r\n");
+	while(1)
+      
+	{
+      	if(usartAvailable() != 0 && faza == 0)
+        {
+          	_delay_ms(50);
+        	usartGetString(ime_i_prezime);
+          	faza = 1;
+        }
+      	if(faza == 1)
+        {
+        	for(int i = 0 ; i < BR_KORISNIKA ; i++)
+            {
+              	char ipbaza[32];
+              	strcpy(ipbaza , KORISNICI[i]);
+            	if(strcmp(ime_i_prezime,ipbaza) == 0)
+                {
+                	broj_korisnika = i;
+                  	faza = 2;
+                }
+                if(i == BR_KORISNIKA - 1 && faza == 1)
+              	{
+                	usartPutString("Niste dobro uneli ime i prezime , pokusajte ponovo.\r\n");
+			faza = 0;
+                }
+            }
+        }
+      	if(faza == 2)
+      	{
+      		usartPutString("Zdravo ");
+          	usartPutString(KORISNICI[broj_korisnika]);
+          	usartPutString(" , unesite vas PIN! \r\n");
+          	faza = 3;
+      	}
+      	if(faza == 3 && brojac_faza3 < 4)
+        {
+        	while(usartAvailable() == 0);
+          	_delay_ms(20);
+          	uneti_pin[brojac_faza3] = usartGetChar();
+          	usartPutChar('*');
+          	brojac_faza3++;
+          	if(brojac_faza3 == 4)
+            {
+              usartPutChar('\r\n');
+              faza = 4;
+              brojac_faza3 == 0;
+            }
+        }
+      	if(faza == 4)
+       	{
+          	char pinbaza[5];
+          	strcpy(pinbaza , PIN[broj_korisnika]);
+       		if(strcmp(pinbaza , uneti_pin) == 0)
+            {
+            	usartPutString("PIN je ispravno unet!\r\n");
+              	faza = 5;
+            }
+          else 
+          	{
+            	usartPutString("Pogresan PIN, pokusajte ponovo!");
+            	faza = 3;
+          	}
+        }
+	}
+
+	return 0;
+}
